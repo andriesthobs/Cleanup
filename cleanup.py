@@ -1,12 +1,31 @@
 import streamlit as st
 import pandas as pd
 from io import BytesIO
+from datetime import datetime
 
-st.set_page_config(page_title="Cleaned / Layer2 Splitter", layout="wide")
+# --------------------------------------------------
+# PAGE CONFIG
+# --------------------------------------------------
 
-st.title("Cleaned → Layer2 Processor")
+st.set_page_config(
+    page_title="Shoprite Incident Cleanup",
+    page_icon="🧹",
+    layout="wide"
+)
 
-# Search values
+st.title("🧹 Shoprite Incident Cleanup")
+st.markdown(
+    """
+    Upload an Excel file containing a **Cleaned** sheet.
+    
+    Matching incidents will automatically be moved to **Layer2** and a new workbook will be generated for download.
+    """
+)
+
+# --------------------------------------------------
+# SEARCH VALUES
+# --------------------------------------------------
+
 search_values = {
     "066363", "099946", "099823", "061444", "099718", "069620", "086385", "070386",
     "052413", "085795", "071277", "094899", "094873", "085614", "070174", "070166",
@@ -34,58 +53,203 @@ search_values = {
     "161991", "047779", "034817", "034045", "069654", "058281", "096906", "053257",
     "089773", "099857", "055657", "067628", "007840", "070904", "033984", "085127",
     "006802", "096605", "099988", "061232", "000107", "081408", "092156", "057188",
-    "050550", "85494", "6399", "34089", "60668","170516"
+    "050550", "85494", "6399", "34089", "60668",
+
+    # NEW VALUES
+    "JWL",
+    "SRGP"
 }
 
+# --------------------------------------------------
+# FILE UPLOAD
+# --------------------------------------------------
+
 uploaded_file = st.file_uploader(
-    "Upload Excel file containing sheet 'Cleaned'",
+    "Upload Shoprite Incident File",
     type=["xlsx"]
 )
 
+# --------------------------------------------------
+# PROCESS FILE
+# --------------------------------------------------
+
 if uploaded_file:
 
-    df_cleaned = pd.read_excel(
-        uploaded_file,
-        sheet_name="Cleaned",
-        dtype=str
-    )
+    try:
 
-    col_c = df_cleaned.columns[2]
-
-    def is_match(value):
-        value = str(value) if pd.notna(value) else ""
-        return any(search in value for search in search_values)
-
-    mask = df_cleaned[col_c].apply(is_match)
-
-    layer2_df = df_cleaned[mask].copy()
-    cleaned_df = df_cleaned[~mask].copy()
-
-    st.success(f"{len(layer2_df)} rows moved to Layer2")
-
-    st.subheader("Layer2 Preview")
-    st.dataframe(layer2_df.head())
-
-    output = BytesIO()
-
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        cleaned_df.to_excel(
-            writer,
+        df_cleaned = pd.read_excel(
+            uploaded_file,
             sheet_name="Cleaned",
-            index=False
+            dtype=str,
+            engine="openpyxl"
         )
 
-        layer2_df.to_excel(
-            writer,
-            sheet_name="Layer2",
-            index=False
+        col_c = df_cleaned.columns[2]
+
+        def find_matches(value):
+            value = str(value) if pd.notna(value) else ""
+
+            matches = []
+
+            for code in search_values:
+                if code.upper() in value.upper():
+                    matches.append(code)
+
+            return matches
+
+        match_list = df_cleaned[col_c].apply(find_matches)
+
+        mask = match_list.apply(lambda x: len(x) > 0)
+
+        layer2_df = df_cleaned[mask].copy()
+        cleaned_df = df_cleaned[~mask].copy()
+
+        # ------------------------------------------
+        # METRICS
+        # ------------------------------------------
+
+        total_incidents = len(df_cleaned)
+        moved_incidents = len(layer2_df)
+        remaining_incidents = len(cleaned_df)
+
+        percentage = (
+            round((moved_incidents / total_incidents) * 100, 2)
+            if total_incidents > 0
+            else 0
         )
 
-    output.seek(0)
+        st.success(
+            f"✅ Cleanup Complete - {moved_incidents:,} incidents moved to Layer2"
+        )
 
-    st.download_button(
-        "Download Processed Workbook",
-        data=output,
-        file_name="Processed_File.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            st.metric("Total Incidents", f"{total_incidents:,}")
+
+        with col2:
+            st.metric("Moved to Layer2", f"{moved_incidents:,}")
+
+        with col3:
+            st.metric("Remaining in Cleaned", f"{remaining_incidents:,}")
+
+        # ------------------------------------------
+        # SUMMARY
+        # ------------------------------------------
+
+        st.subheader("📊 Cleanup Summary")
+
+        st.info(
+            f"""
+            • Total incidents analysed: **{total_incidents:,}**
+
+            • Incidents moved to Layer2: **{moved_incidents:,}**
+
+            • Incidents remaining in Cleaned: **{remaining_incidents:,}**
+
+            • Percentage moved: **{percentage}%**
+            """
+        )
+
+        # ------------------------------------------
+        # BREAKDOWN
+        # ------------------------------------------
+
+        match_counts = {}
+
+        for code in search_values:
+
+            count = df_cleaned[col_c].fillna("").astype(str).str.upper().str.contains(
+                code.upper(),
+                na=False,
+                regex=False
+            ).sum()
+
+            if count > 0:
+                match_counts[code] = count
+
+        if match_counts:
+
+            breakdown_df = pd.DataFrame(
+                list(match_counts.items()),
+                columns=["Match Value", "Incidents"]
+            )
+
+            breakdown_df = breakdown_df.sort_values(
+                by="Incidents",
+                ascending=False
+            )
+
+            st.subheader("📈 Incident Breakdown")
+
+            st.dataframe(
+                breakdown_df,
+                use_container_width=True,
+                hide_index=True
+            )
+
+        # ------------------------------------------
+        # PREVIEW
+        # ------------------------------------------
+
+        tab1, tab2 = st.tabs(
+            ["Cleaned (Remaining)", "Layer2 (Moved)"]
+        )
+
+        with tab1:
+            st.subheader(
+                f"Remaining Records ({remaining_incidents:,})"
+            )
+            st.dataframe(
+                cleaned_df.head(50),
+                use_container_width=True
+            )
+
+        with tab2:
+            st.subheader(
+                f"Moved Records ({moved_incidents:,})"
+            )
+            st.dataframe(
+                layer2_df.head(50),
+                use_container_width=True
+            )
+
+        # ------------------------------------------
+        # OUTPUT FILE
+        # ------------------------------------------
+
+        output = BytesIO()
+
+        with pd.ExcelWriter(
+            output,
+            engine="openpyxl"
+        ) as writer:
+
+            cleaned_df.to_excel(
+                writer,
+                sheet_name="Cleaned",
+                index=False
+            )
+
+            layer2_df.to_excel(
+                writer,
+                sheet_name="Layer2",
+                index=False
+            )
+
+        output.seek(0)
+
+        filename = (
+            f"Shoprite_Incident_Cleanup_"
+            f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        )
+
+        st.download_button(
+            label="📥 Download Processed Workbook",
+            data=output,
+            file_name=filename,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+    except Exception as e:
+        st.error(f"Error processing file: {e}")
